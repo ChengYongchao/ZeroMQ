@@ -20,7 +20,7 @@ public class subscribe implements Runnable {
             int index = 1;
             while (true) {
                 //  Socket to talk to server
-                subscriber.connect("tcp://localhost:5556");
+                subscriber.connect("tcp://172.16.10.58:5556");
                 subscriber.subscribe(filter.getBytes());
                 System.out.println("beginning subscribe:");
                 String message = subscriber.recvStr(0).trim();
