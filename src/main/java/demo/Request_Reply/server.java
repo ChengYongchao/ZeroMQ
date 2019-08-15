@@ -1,5 +1,6 @@
-package demo;
+package demo.Request_Reply;
 
+import demo.SerializedObject;
 import org.zeromq.ZMQ;
 
 import java.io.*;

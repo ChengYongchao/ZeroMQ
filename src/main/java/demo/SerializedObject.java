@@ -5,7 +5,7 @@ import java.io.Serializable;
 public class SerializedObject implements Serializable {
     public String message;
 
-    SerializedObject() {
+    public SerializedObject() {
         message = "hello word!";
     }
 
