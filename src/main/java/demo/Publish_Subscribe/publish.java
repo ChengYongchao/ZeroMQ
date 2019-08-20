@@ -10,7 +10,7 @@ public class publish {
         ZMQ.Socket publisher = context.createSocket(SocketType.PUB);
 
         try {
-            publisher.bind("tcp://172.16.10.58:5556");
+            publisher.bind("tcp://*:5556");
             publisher.bind("ipc://weather");
             int index = 1;
             while (true) {

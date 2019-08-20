@@ -10,11 +10,11 @@ public class taskwork {
         try (ZContext context = new ZContext()) {
             //  Socket to receive messages on
             ZMQ.Socket receiver = context.createSocket(SocketType.PULL);
-            receiver.connect("tcp://localhost:5557");
+            receiver.connect("tcp://172.16.10.176:5557");
 
             //  Socket to send messages to
             ZMQ.Socket sender = context.createSocket(SocketType.PUSH);
-            sender.connect("tcp://localhost:5558");
+            sender.connect("tcp://172.16.10.176:5558");
 
             //  Process tasks forever
             while (!Thread.currentThread().isInterrupted()) {

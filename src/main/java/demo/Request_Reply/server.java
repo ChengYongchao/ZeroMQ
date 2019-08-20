@@ -9,7 +9,7 @@ public class server {
     ZMQ.Context context;
     ZMQ.Socket responder;
     String sendData;
-    private static String ENCODING = "utf-8";
+    private static String ENCODING = "GBK";
     private static String IP ="tcp://172.16.10.58:5555";
 
     private server() {
@@ -45,9 +45,10 @@ public class server {
     public static void main(String[] args) throws InterruptedException, IOException {
         server server1 = new server();
 
-        SerializedObject object = new SerializedObject();
+        SerializedObject object = new SerializedObject(true);
+       // System.out.println(object.toString());
         String message = serialize(object);
-        //server1.setSendData(message);
+        server1.setSendData(message);
         server1.start();
 
     }
