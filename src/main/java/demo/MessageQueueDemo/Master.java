@@ -1,154 +1,220 @@
 package demo.MessageQueueDemo;
 
+import org.omg.PortableInterceptor.INACTIVE;
 import org.zeromq.*;
+import zmq.ZError;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.Iterator;
+import java.io.*;
+import java.lang.reflect.Array;
+import java.util.*;
 
 public class Master implements Runnable {
 
     private final static int HEARTBEAT_INTERVAL = 1000;
-    //  Paranoid Pirate Protocol constants
-    private final static String PPP_READY = "\001"; //  Signals worker is ready
-    private final static String PPP_HEARTBEAT = "\002"; //  Signals worker heartbeat
-    private ZContext context = null;
-    private ArrayList<Worker> workers = new ArrayList<Worker>();
-    // int task = 100;
-    HashSet<Long> task = new HashSet<Long>();
+    private final static String WORKER_READY = "\001"; //  Signals worker is ready
+    private final static String WORKER_RESULT = "\002"; //  worker计算完成返回消息标志
+    private final static String MASTER_TASK = "\003";   //主节点发送任务消息标志
+    private final static String MASTER_VERTEX = "\004";   //主节点发送顶点消息标志
 
-    Master(ZContext context) {
-        this.context = context;
+    private ZContext context = new ZContext();
+    private ZMQ.Socket Master = null;
+    private ZMQ.Poller poller = null;
+    private WorkerQueue workerQueue = new WorkerQueue();
 
-        for (Long num = 100000L; num > 0; num--) {
-            task.add(num);
-        }
-    }
+    private final List<List<Integer>> workerVertices = new ArrayList<>();   //顶点集
+    private int index = 0;
+    private Map<Integer, ZFrame> IdToAddress = new HashMap<>(); //节点和顶点集的对应关系
+    private Map<Integer, Integer> result = new HashMap<>();  //结果集
+    private Boolean isVertexSend = false;
 
-    private static class Worker {
-        ZFrame address;  //  Address of worker
-        String identity; //  Printable identity
-        long expiry;   //  Expires at this time
+    public Master() {
 
-        protected Worker(ZFrame address) {
-            this.address = address;
-            identity = new String(address.getData(), ZMQ.CHARSET);
+        try {
+            Master = context.createSocket(SocketType.ROUTER);
+            Master.bind("tcp://*:5556"); //  For workers
+            poller = context.createPoller(1);
+            poller.register(Master, ZMQ.Poller.POLLIN);
 
-        }
-
-        //  The ready method puts a worker to the end of the ready list:
-        protected void ready(ArrayList<Worker> workers) {
-            Iterator<Worker> it = workers.iterator();
-            while (it.hasNext()) {
-                Worker worker = it.next();
-                if (identity.equals(worker.identity)) {
-                    it.remove();
-                    break;
-                }
-            }
-            workers.add(this);
+        } catch (Exception e) {
+            System.err.println("绑定端口失败");
         }
 
-        //  The next method returns the next available worker address:
-        public static ZFrame next(ArrayList<Worker> workers) {
-            Worker worker = workers.remove(0);
-            assert (worker != null);
-            ZFrame frame = worker.address;
-            return frame;
-        }
-
-        //  The purge method looks for and kills expired workers. We hold workers
-        //  from oldest to most recent, so we stop at the first alive worker:
-        protected static void purge(ArrayList<Worker> workers) {
-            Iterator<Worker> it = workers.iterator();
-            while (it.hasNext()) {
-                Worker worker = it.next();
-                if (System.currentTimeMillis() < worker.expiry) {
-                    break;
-                }
-                it.remove();
-            }
-        }
 
     }
 
 
+    // 监听方法.
     @Override
     public void run() {
         System.out.println("proxy is start:");
         try {
-            ZMQ.Socket frontend = context.createSocket(SocketType.ROUTER);
-            ZMQ.Socket backend = context.createSocket(SocketType.ROUTER);
-            frontend.bind("tcp://*:5555"); //  For clients
-            backend.bind("tcp://*:5556"); //  For workers
-            //  List of available workers
-            ArrayList<Worker> workers = new ArrayList<Worker>();
-
-            //  Send out heartbeats at regular intervals
-
-
-            ZMQ.Poller poller = context.createPoller(2);
-            poller.register(backend, ZMQ.Poller.POLLIN);
-            poller.register(frontend, ZMQ.Poller.POLLIN);
 
             while (true) {
-                //boolean workersAvailable = workers.size() > 0;
+
                 int rc = poller.poll(HEARTBEAT_INTERVAL);
                 if (rc == -1)
                     break; //  Interrupted
 
-                //  Handle worker activity on backend
+                // 获取 worker响应
                 if (poller.pollin(0)) {
-                    //  Use worker address for LRU routing
-                    ZMsg msg = ZMsg.recvMsg(backend);
+
+                    ZMsg msg = ZMsg.recvMsg(Master);
                     if (msg == null)
                         break; //  Interrupted
 
-                    //  Any sign of life from worker means it's ready
+                    //  获取msg address，根据address区分不同worker（也可设置uid）
                     ZFrame address = msg.unwrap();
-                    Worker worker = new Worker(address);
-                    worker.ready(workers);
 
-                    //  Validate control message, or return reply to client
-                    if (msg.size() == 1) {
-                        ZFrame frame = msg.getFirst();
-                        //判断是否为心跳信息
-                        String data = new String(frame.getData(), ZMQ.CHARSET);
-                        if (!data.equals(PPP_READY) && !data.equals(PPP_HEARTBEAT)) {
-                            System.out.println("E: invalid message from worker");
-                            msg.dump(System.out);
+
+                    //获取标志位signal
+                    ZFrame frame = msg.getFirst();
+                    String signal = new String(frame.getData(), ZMQ.CHARSET);
+
+                    // 判断是否是ready消息
+                    if (WORKER_READY.equals(signal)) {
+                        workerQueue.addWorker(address);
+                        System.out.println("worker:" + address + "is ready");
+                    } else if (WORKER_RESULT.equals(signal)) { //判断是否是结果消息
+                        Map<Integer, Integer> taskResult = (HashMap) serializeToObject(msg.getLast().getData());
+                        result.putAll(taskResult);
+                        int sum = 0;
+                        for (Integer keyValue : result.values()) {
+                            sum += keyValue;
                         }
-                        msg.destroy();
-                    }
-                    //解包后size为2 约定是计算结果消息
-                    if (msg.size() == 2) {
-                        String id = new String(msg.pop().getData(), ZMQ.CHARSET);
-                        String value = new String(msg.pop().getData(), ZMQ.CHARSET);
+
+                        if (sum > 0) {
+                            System.out.println("=======>结果:" + sum + "大于0，继续计算");
+                            sendTask();
+
+                        } else {
+                            System.out.println("=======>结果:" + sum + "小于0，停止计算");
+                            return;
+                        }
 
                     }
-                    //如果任务未发送完毕，且有可用worker 则发送任务
-                    Iterator<Long> iterator = task.iterator();
+                    msg.destroy();
+                    continue;
+                }
+                //  开始发顶点和任务 只发一次
+                if (!isVertexSend && workerQueue.size() > 0) {
 
-                    if (workers.size() > 0 && iterator.hasNext()) {
-Long task
+                    //初始化顶点集
+                    //  初始值
+                    int id = 0;
+                    for (Integer num = workerQueue.size(); num > 0; num--) {
+                        List<Integer> vertices = new ArrayList<>();
 
-                        ZMsg sendTaskMsg = new ZMsg();
-                        sendTaskMsg.add(Worker.next(workers));
-                        sendTaskMsg.add("" + );
-                        sendTaskMsg.add("" + "任务" + task);
-                        System.out.println("发送任务" + task + "address:" + sendTaskMsg.getFirst());
-                        sendTaskMsg.send(backend);
+                        for (int i = 5; i > 0; i--) {
+                            vertices.add(id);
+                            result.put(id++,1000);
+                        }
+                        workerVertices.add(vertices);
                     }
+                    this.index = workerVertices.size() - 1;
+
+
+                    //从节点可能已经连接，判断节点数 开始发送顶点
+                    sendVertex();
+                    //顶点发送完，若没有消息则认为节点已接收到顶点，开始发送任务
+                    sendTask();
                 }
             }
+        } catch (IOException e) {
+
+            System.err.println("序列化失败");
+
         } catch (Exception e) {
+
+        } finally {
 
         }
     }
 
-    public static void main(String[] args) {
-        ZContext context = new ZContext();
-        Thread thread1 = new Thread(new Master(context));
-        thread1.start();
+
+    /*
+     * todo 发送任务方法
+     *
+     * */
+    public void sendTask() throws IOException {
+        for (ZFrame value : IdToAddress.values()) {
+            ZFrame address = new ZFrame(value.getData());
+            ZMsg taskMsg = new ZMsg();
+            taskMsg.add(address);
+            taskMsg.add(MASTER_TASK);
+            taskMsg.add(serialize(result));
+            taskMsg.send(Master);
+            System.out.println("发送结果集======>");
+        }
+
+
+    }
+
+    public void sendVertex() throws IOException, ClassNotFoundException {
+        if (!isVertexSend) {
+            //todo 只发送一次。
+            // 有可用worker 则发送顶点集
+            System.out.println("wokers num:" + workerQueue.size());
+
+            while (workerQueue.size() > 0 && index >= 0) {
+                ZMsg sendTaskMsg = new ZMsg();
+                ZFrame address = new ZFrame(workerQueue.next().getData());
+                // 设置address 和顶点集映射关系
+                IdToAddress.put(index, new ZFrame(address.getData()));
+
+                sendTaskMsg.add(address);
+                sendTaskMsg.add(MASTER_VERTEX);
+                sendTaskMsg.add(serialize(workerVertices.get(index)));
+
+                System.out.println("=======>发送任务" + (String) serializeToObject(serialize(workerVertices.get(index))).toString() + "address:" + sendTaskMsg.getFirst());
+                sendTaskMsg.send(Master);
+
+
+                index--;
+            }
+            //只发送一次
+            isVertexSend = true;
+        }
+    }
+
+    /**
+     * 序列化
+     */
+    public static byte[] serialize(Object obj) throws IOException {
+        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+        ObjectOutputStream objectOutputStream = new ObjectOutputStream(byteArrayOutputStream);
+        objectOutputStream.writeObject(obj);
+        objectOutputStream.flush();
+
+        // String string = byteArrayOutputStream.toString("GBK");
+        objectOutputStream.close();
+        byteArrayOutputStream.close();
+        return byteArrayOutputStream.toByteArray();
+    }
+
+
+    /**
+     * 反序列化
+     */
+    public static Object serializeToObject(byte[] bytes) throws IOException, ClassNotFoundException {
+        ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(bytes);
+        ObjectInputStream objectInputStream = new ObjectInputStream(byteArrayInputStream);
+        Object object = objectInputStream.readObject();
+        objectInputStream.close();
+        byteArrayInputStream.close();
+        return object;
+    }
+
+
+    public static void main(String[] args) throws IOException, ClassNotFoundException {
+
+        Thread master = new Thread(new Master());
+        master.start();
+     /* List<Integer> test = new ArrayList<>();
+      for(int i =10; i >0; i--){
+          test.add(i);
+      }
+      byte [] incode = serialize(test);
+      List res = (ArrayList)serializeToObject(incode);
+      System.out.println(res.toString());*/
     }
 }

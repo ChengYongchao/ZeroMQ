@@ -18,7 +18,7 @@ public class SerializedObject implements Serializable {
     }
 
     public SerializedObject(Boolean bool) {
-         message = readToString("C:\\Users\\Administrator\\Desktop\\bigdata.txt");
+         //message = readToString("C:\\Users\\Administrator\\Desktop\\bigdata.txt");
     }
 
     @Override
