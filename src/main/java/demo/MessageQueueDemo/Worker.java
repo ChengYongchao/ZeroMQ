@@ -1,30 +1,28 @@
 package demo.MessageQueueDemo;
 
 import org.zeromq.*;
-
 import java.io.IOException;
-import java.security.Policy;
 import java.util.*;
-
 import static org.zeromq.ZMQ.*;
 
 
 //worker DEALER
-public class worker implements Runnable {
+public class Worker implements Runnable {
 
     ZContext context = null;
 
     private final static int HEARTBEAT_INTERVAL = 1000;
-    private final static String WORKER_READY = "\001"; //  Signals worker is ready
-    private final static String WORKER_RESULT = "\002"; //  worker计算完成返回消息标志
-    private final static String MASTER_TASK = "\003";   //主节点发送任务消息标志
-    private final static String MASTER_VERTEX = "\004";   //主节点发送顶点消息标志
+    private final static String WORKER_READY = "WORKER_READY"; //  Signals worker is ready
+    private final static String WORKER_RESULT = "WORKER_RESULT"; //  worker计算完成返回消息标志
+    private final static String WORKER_VERTEX = "WORKER_VERTEX"; //  worker收到顶点返回信息
+    private final static String MASTER_TASK = "MASTER_TASK";   //主节点发送任务消息标志
+    private final static String MASTER_VERTEX = "MASTER_VERTEX";   //主节点发送顶点消息标志
 
     private int index;
 
     private List vertex = null;//顶点集
 
-    public worker(ZContext cxt, int index) {
+    public Worker(ZContext cxt, int index) {
         this.context = cxt;
         this.index = index;
     }
@@ -56,22 +54,27 @@ public class worker implements Runnable {
                     if (MASTER_VERTEX.equals(signal)) {
                         System.out.println("====>接收到顶点信息<======");
                         vertex = (List) Master.serializeToObject(receivedmsg.getLast().getData());
+                        ZMsg sendMsg = new ZMsg();
+                        sendMsg.add(WORKER_VERTEX);
+                        sendMsg.send(worker);
 
                     } else if (MASTER_TASK.equals(signal)) {
 
                         try {
                             Map<Integer, Integer> task = (HashMap) Master.serializeToObject(receivedmsg.getLast().getData());
                             Iterator<Integer> id = vertex.iterator();
+                            Map<Integer,Integer> res = new HashMap<>();
+
                             while (id.hasNext()) {
                                 Integer vertexId = id.next();
                                 Integer resultNum = (Integer) task.get(vertexId);
-                                task.put(vertexId, resultNum - 100);
+                                res.put(vertexId, resultNum - 100);
                             }
 
                             //任务完成,返回消息
                             ZMsg taskFinishedMsg = new ZMsg();
                             taskFinishedMsg.add(WORKER_RESULT);
-                            taskFinishedMsg.add(Master.serialize(task));
+                            taskFinishedMsg.add(Master.serialize(res));
                             taskFinishedMsg.send(worker);
                             System.out.println("======>任务完成，返回结果<========");
                         } catch (IOException e) {
@@ -96,8 +99,8 @@ public class worker implements Runnable {
         ZContext context = new ZContext();
         //Thread thread1 = new Thread(new worker(context));
         //thread1.start();
-        for (int num = 2; num > 0; num--) {
-            new Thread(new worker(context, num)).start();
+        for (int num = 5; num > 0; num--) {
+            new Thread(new Worker(context, num)).start();
         }
     }
 }
